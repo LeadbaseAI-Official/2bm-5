@@ -19,6 +19,7 @@ app: FastAPI = FastAPI(title="Local GGUF LLM API Server")
 class ChatRequest(BaseModel):
     prompt: str
     jid: Optional[str] = None
+    image_base64: Optional[str] = None
 
 # Global handle for cloudflared process
 tunnel_process: Optional[subprocess.Popen] = None
@@ -223,7 +224,7 @@ def chat(req: ChatRequest) -> dict:
     if not req.prompt:
         raise HTTPException(status_code=400, detail="Prompt parameter is required.")
     
-    response_text: str = run_model_query(req.prompt, req.jid)
+    response_text: str = run_model_query(req.prompt, req.jid, req.image_base64)
     return {
         "response": response_text,
         "prompt": req.prompt
