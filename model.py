@@ -3,7 +3,7 @@ from typing import Optional, Dict, Any
 from llama_cpp import Llama, GGML_TYPE_Q8_0
 from chat_template import format_chat_prompt
 
-MODEL_CODE = "4bm"
+MODEL_CODE = "2bm"
 
 _llm_instance: Optional[Llama] = None
 _states: Dict[str, Any] = {}
@@ -21,7 +21,7 @@ def find_gguf_file() -> Path:
             if "mmproj" not in path.name:
                 return path
     # Fallback default
-    return Path("gemma-4-E4B-it-Q4_K_M.gguf")
+    return Path("gemma-4-E2B-it-Q5_K_M.gguf")
 
 def find_mmproj_file() -> Optional[Path]:
     for path in Path(".").glob("*mmproj*.gguf"):
