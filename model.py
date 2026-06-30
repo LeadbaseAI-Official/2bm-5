@@ -60,15 +60,12 @@ def get_llm() -> Llama:
         )
     return _llm_instance
 
+_prefix_states: Dict[str, Any] = {}
+
 def run_model_query(prompt: str, jid: Optional[str] = None, image_base64: Optional[str] = None) -> str:
     try:
         llm: Llama = get_llm()
         
-        # Load KV cache state if it exists for this conversation
-        if jid and jid in _states:
-            llm.load_state(_states[jid])
-            print(f"[Model] Restored KV cache state for JID: {jid}", flush=True)
-            
         if image_base64 and getattr(llm, "chat_handler", None) is not None:
             print(f"[Model] Running vision query with image of size {len(image_base64)} characters", flush=True)
             if not image_base64.startswith("data:image"):
@@ -84,7 +81,7 @@ def run_model_query(prompt: str, jid: Optional[str] = None, image_base64: Option
                         ]
                     }
                 ],
-                max_tokens=150
+                max_tokens=512
             )
             text_result: str = response["choices"][0]["message"]["content"]
         else:
@@ -93,16 +90,31 @@ def run_model_query(prompt: str, jid: Optional[str] = None, image_base64: Option
                 prompt = f"[User uploaded an image. Base64 length: {len(image_base64)}]\n{prompt}"
             
             formatted_prompt: str = format_chat_prompt(prompt)
+            
+            # Extract fixed prefix up to Conversation History
+            parts = formatted_prompt.split("Conversation History:")
+            if len(parts) > 1:
+                prefix = parts[0] + "Conversation History:"
+            else:
+                prefix = formatted_prompt
+                
+            prefix_tokens = llm.tokenize(prefix.encode("utf-8"))
+            
+            # Load prefix cache state if it matches, otherwise build it
+            if prefix in _prefix_states:
+                llm.load_state(_prefix_states[prefix])
+                print(f"[Model] Restored prefix cache ({len(prefix_tokens)} tokens)", flush=True)
+            else:
+                llm.reset()
+                llm.eval(prefix_tokens)
+                _prefix_states[prefix] = llm.save_state()
+                print(f"[Model] Evaluated and cached new prefix ({len(prefix_tokens)} tokens)", flush=True)
+            
             response = llm(
                 formatted_prompt,
-                max_tokens=150,
+                max_tokens=512,
             )
             text_result: str = response["choices"][0]["text"]
-            
-        # Save updated KV cache state for this conversation
-        if jid:
-            _states[jid] = llm.save_state()
-            print(f"[Model] Saved KV cache state for JID: {jid}", flush=True)
             
         return text_result
     except Exception as e:
