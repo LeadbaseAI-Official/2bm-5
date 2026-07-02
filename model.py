@@ -61,71 +61,54 @@ def get_llm() -> Llama:
     return _llm_instance
 
 import pickle
+import threading
 from pathlib import Path
 
 # Create states directory
 STATES_DIR = Path("states")
 STATES_DIR.mkdir(parents=True, exist_ok=True)
 
+_llm_lock = threading.Lock()
+
 def run_model_query(prompt: str, jid: Optional[str] = None, image_base64: Optional[str] = None) -> str:
-    try:
-        llm: Llama = get_llm()
-        
-        if image_base64 and getattr(llm, "chat_handler", None) is not None:
-            print(f"[Model] Running vision query with image of size {len(image_base64)} characters", flush=True)
-            if not image_base64.startswith("data:image"):
-                image_base64 = f"data:image/jpeg;base64,{image_base64}"
+    with _llm_lock:
+        try:
+            llm: Llama = get_llm()
             
-            response = llm.create_chat_completion(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": image_base64}}
-                        ]
-                    }
-                ],
-                max_tokens=512
-            )
-            text_result: str = response["choices"][0]["message"]["content"]
-        else:
-            if image_base64:
-                print(f"[Model] Text fallback mode: Received image of size {len(image_base64)} characters", flush=True)
-                prompt = f"[User uploaded an image. Base64 length: {len(image_base64)}]\n{prompt}"
-            
-            formatted_prompt: str = format_chat_prompt(prompt)
-            new_tokens = llm.tokenize(formatted_prompt.encode("utf-8"))
-            
-            state_file = STATES_DIR / f"{jid}.state" if jid else None
-            tokens_file = STATES_DIR / f"{jid}.tokens" if jid else None
-            common_len = 0
-            
-            # 1. First, try loading the specific JID cache state
-            if jid and state_file.exists() and tokens_file.exists():
-                try:
-                    with open(tokens_file, "rb") as tf:
-                        cached_tokens = pickle.load(tf)
-                    
-                    for t1, t2 in zip(cached_tokens, new_tokens):
-                        if t1 != t2:
-                            break
-                        common_len += 1
-                        
-                    if common_len > 0:
-                        llm.load_state(state_file.read_bytes())
-                        print(f"[Model] Restored cache state for JID: {jid} (prefix matched: {common_len}/{len(cached_tokens)} tokens)", flush=True)
-                except Exception as cache_err:
-                    print(f"[Model] Warning: Failed to load cache state for JID {jid}: {cache_err}", flush=True)
-                    common_len = 0
-            
-            # 2. If JID cache missed, fall back to the pre-cached global prefix
-            if common_len == 0:
-                global_state = STATES_DIR / "global_prefix.state"
-                global_tokens = STATES_DIR / "global_prefix.tokens"
-                if global_state.exists() and global_tokens.exists():
+            if image_base64 and getattr(llm, "chat_handler", None) is not None:
+                print(f"[Model] Running vision query with image of size {len(image_base64)} characters", flush=True)
+                if not image_base64.startswith("data:image"):
+                    image_base64 = f"data:image/jpeg;base64,{image_base64}"
+                
+                response = llm.create_chat_completion(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": image_base64}}
+                            ]
+                        }
+                    ],
+                    max_tokens=512
+                )
+                text_result: str = response["choices"][0]["message"]["content"]
+            else:
+                if image_base64:
+                    print(f"[Model] Text fallback mode: Received image of size {len(image_base64)} characters", flush=True)
+                    prompt = f"[User uploaded an image. Base64 length: {len(image_base64)}]\n{prompt}"
+                
+                formatted_prompt: str = format_chat_prompt(prompt)
+                new_tokens = llm.tokenize(formatted_prompt.encode("utf-8"))
+                
+                state_file = STATES_DIR / f"{jid}.state" if jid else None
+                tokens_file = STATES_DIR / f"{jid}.tokens" if jid else None
+                common_len = 0
+                
+                # 1. First, try loading the specific JID cache state
+                if jid and state_file.exists() and tokens_file.exists():
                     try:
-                        with open(global_tokens, "rb") as tf:
+                        with open(tokens_file, "rb") as tf:
                             cached_tokens = pickle.load(tf)
                         
                         for t1, t2 in zip(cached_tokens, new_tokens):
@@ -134,34 +117,55 @@ def run_model_query(prompt: str, jid: Optional[str] = None, image_base64: Option
                             common_len += 1
                             
                         if common_len > 0:
-                            llm.load_state(global_state.read_bytes())
-                            print(f"[Model] Restored cache from global prefix cache (prefix matched: {common_len}/{len(cached_tokens)} tokens)", flush=True)
-                    except Exception as glob_err:
-                        print(f"[Model] Warning: Failed to load global prefix cache: {glob_err}", flush=True)
+                            llm.load_state(state_file.read_bytes())
+                            print(f"[Model] Restored cache state for JID: {jid} (prefix matched: {common_len}/{len(cached_tokens)} tokens)", flush=True)
+                    except Exception as cache_err:
+                        print(f"[Model] Warning: Failed to load cache state for JID {jid}: {cache_err}", flush=True)
                         common_len = 0
-                        
-            if common_len == 0:
-                llm.reset()
-                print(f"[Model] Cache miss/fresh start for JID: {jid}", flush=True)
-            
-            response = llm(
-                formatted_prompt,
-                max_tokens=512,
-            )
-            text_result: str = response["choices"][0]["text"]
-            
-            if jid:
-                try:
-                    state_file.write_bytes(llm.save_state())
-                    # Tokenize combined prompt and output to align cache end
-                    full_evaluated_text = formatted_prompt + text_result
-                    full_tokens = llm.tokenize(full_evaluated_text.encode("utf-8"))
-                    with open(tokens_file, "wb") as tf:
-                        pickle.dump(full_tokens, tf)
-                    print(f"[Model] Saved updated cache state for JID: {jid} ({len(full_tokens)} tokens)", flush=True)
-                except Exception as save_err:
-                    print(f"[Model] Warning: Failed to save cache state for JID {jid}: {save_err}", flush=True)
-            
-        return text_result
-    except Exception as e:
-        return f"Exception raised while running llama-cpp: {e}"
+                
+                # 2. If JID cache missed, fall back to the pre-cached global prefix
+                if common_len == 0:
+                    global_state = STATES_DIR / "global_prefix.state"
+                    global_tokens = STATES_DIR / "global_prefix.tokens"
+                    if global_state.exists() and global_tokens.exists():
+                        try:
+                            with open(global_tokens, "rb") as tf:
+                                cached_tokens = pickle.load(tf)
+                            
+                            for t1, t2 in zip(cached_tokens, new_tokens):
+                                if t1 != t2:
+                                    break
+                                common_len += 1
+                                
+                            if common_len > 0:
+                                llm.load_state(global_state.read_bytes())
+                                print(f"[Model] Restored cache from global prefix cache (prefix matched: {common_len}/{len(cached_tokens)} tokens)", flush=True)
+                        except Exception as glob_err:
+                            print(f"[Model] Warning: Failed to load global prefix cache: {glob_err}", flush=True)
+                            common_len = 0
+                            
+                if common_len == 0:
+                    llm.reset()
+                    print(f"[Model] Cache miss/fresh start for JID: {jid}", flush=True)
+                
+                response = llm(
+                    formatted_prompt,
+                    max_tokens=512,
+                )
+                text_result: str = response["choices"][0]["text"]
+                
+                if jid:
+                    try:
+                        state_file.write_bytes(llm.save_state())
+                        # Tokenize combined prompt and output to align cache end
+                        full_evaluated_text = formatted_prompt + text_result
+                        full_tokens = llm.tokenize(full_evaluated_text.encode("utf-8"))
+                        with open(tokens_file, "wb") as tf:
+                            pickle.dump(full_tokens, tf)
+                        print(f"[Model] Saved updated cache state for JID: {jid} ({len(full_tokens)} tokens)", flush=True)
+                    except Exception as save_err:
+                        print(f"[Model] Warning: Failed to save cache state for JID {jid}: {save_err}", flush=True)
+                
+            return text_result
+        except Exception as e:
+            return f"Exception raised while running llama-cpp: {e}"
