@@ -245,7 +245,8 @@ def startup_event() -> None:
             state_file = STATES_DIR / "global_prefix.state"
             tokens_file = STATES_DIR / "global_prefix.tokens"
             
-            state_file.write_bytes(llm.save_state())
+            with open(state_file, "wb") as sf:
+                pickle.dump(llm.save_state(), sf)
             with open(tokens_file, "wb") as tf:
                 pickle.dump(prefix_tokens, tf)
                 
