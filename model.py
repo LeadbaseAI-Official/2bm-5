@@ -80,7 +80,7 @@ def run_model_query(prompt: str, jid: Optional[str] = None, image_base64: Option
                 if not image_base64.startswith("data:image"):
                     image_base64 = f"data:image/jpeg;base64,{image_base64}"
                 
-                response = llm.create_chat_completion(
+                response_generator = llm.create_chat_completion(
                     messages=[
                         {
                             "role": "user",
@@ -90,9 +90,19 @@ def run_model_query(prompt: str, jid: Optional[str] = None, image_base64: Option
                             ]
                         }
                     ],
-                    max_tokens=512
+                    max_tokens=512,
+                    stream=True
                 )
-                text_result: str = response["choices"][0]["message"]["content"]
+                text_chunks = []
+                print("[Model Vision] Generating: ", end="", flush=True)
+                for chunk in response_generator:
+                    delta = chunk["choices"][0]["delta"]
+                    if "content" in delta:
+                        token_text = delta["content"]
+                        print(token_text, end="", flush=True)
+                        text_chunks.append(token_text)
+                print("\n[Model Vision] Generation complete.", flush=True)
+                text_result = "".join(text_chunks)
             else:
                 if image_base64:
                     print(f"[Model] Text fallback mode: Received image of size {len(image_base64)} characters", flush=True)
@@ -148,11 +158,21 @@ def run_model_query(prompt: str, jid: Optional[str] = None, image_base64: Option
                     llm.reset()
                     print(f"[Model] Cache miss/fresh start for JID: {jid}", flush=True)
                 
-                response = llm(
+                print(f"[Model] Evaluating context & generating response...", flush=True)
+                response_generator = llm(
                     formatted_prompt,
                     max_tokens=512,
+                    stream=True
                 )
-                text_result: str = response["choices"][0]["text"]
+                
+                text_result_chunks = []
+                print("[Model] Generating: ", end="", flush=True)
+                for chunk in response_generator:
+                    token_text = chunk["choices"][0]["text"]
+                    print(token_text, end="", flush=True)
+                    text_result_chunks.append(token_text)
+                print("\n[Model] Generation complete.", flush=True)
+                text_result = "".join(text_result_chunks)
                 
                 if jid:
                     try:
